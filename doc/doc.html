@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LWindows Cheat-Sheet</title>
+<style>
+body { font-family: "Segoe UI", Tahoma, sans-serif; background: #1e1e1e; color: #d4d4d4; line-height: 1.6; padding: 2em; }
+h1, h2, h3 { color: #569cd6; }
+code { font-family: Consolas, monospace; padding: 2px 4px; border-radius: 3px; }
+pre { background: #252526; padding: 1em; border-radius: 4px; overflow-x: auto; transition: 0.3s; }
+pre:hover { background: #333333; }
+code.func { color: #dcdcaa; }
+code.type { color: #4ec9b0; }
+code.keyword { color: #569cd6; font-weight: bold; }
+ul { margin-left: 1.5em; }
+.alias { color: #9cdcfe; }
+.note { color: #c586c0; }
+</style>
+</head>
+<body>
+
+<h1>LWindows — Complete Cheat-Sheet</h1>
+
+<h2>Main Functions</h2>
+<p>To require it, do: <code class="func">require</code><code>"windows.h"</code></p>
+
+<pre><code class="func">ToWindowProc</code>(hWnd, lfnc) -&gt; <code class="type">userdata</code></pre>
+<p>Converts a Lua function into a Win32 <code>WNDPROC</code>. Keeps the closure alive. <span class="note">Important: if the garbage collector collects the closure while the window is still active, the WNDPROC becomes invalid and your application may crash.</span></p>
+
+<pre><code class="func">Num2Addr</code>(int) -&gt; <code class="type">userdata</code></pre>
+<p>Converts an integer into <code>userdata</code> representing a pointer.</p>
+
+<pre><code class="func">Addr2Num</code>(userdata) -&gt; <code class="type">int</code></pre>
+<p>Converts a <code>userdata</code> containing a pointer into an integer.</p>
+
+<pre><code class="func">Val2Addr</code>(val) -&gt; <code class="type">userdata</code></pre>
+<p>Creates a memory/userdata block from a Lua value:</p>
+<ul>
+<li>Int, Number, Boolean → simple copy</li>
+<li>Nil + size → empty buffer</li>
+<li>Table → recursive binary blob</li>
+</ul>
+
+<pre><code class="func">Addr2Val</code>(userdata(nativeFuncPtr), returnType, {argTypes}) -&gt; lfnc</pre>
+<p>Converts a native function pointer into a safe Lua closure. LWindows internally handles up to 16 arguments. <span class="note">Arguments beyond this limit will raise an error.</span></p>
+
+<pre><code class="func">Addr2Val</code>(userdata, valueType) -&gt; anyValue</pre>
+<p>Reads memory from a pointer and returns the specified Lua type. Supports basic types and pointers; any invalid access produces a safe Lua error instead of crashing.</p>
+
+<pre><code class="func">LoopMessages</code>() -&gt; <code class="type">boolean</code></pre>
+<p>Processes the Windows message queue until the application closes. Returns <code>true</code> if it finishes correctly, or <code>nil</code> and an error code if it fails.</p>
+<p><span class="note">Internally, closures registered as WinProc receive the messages and must return <code>DefWindowProc</code> if unhandled. LWindows automatically routes messages by <code>HWND</code> and class name.</span></p>
+
+<h2>Type Aliases</h2>
+<ul>
+<li><code class="alias">i</code> or <code class="alias">integer</code></li>
+<li><code class="alias">ir</code> or <code class="alias">integerref</code></li>
+<li><code class="alias">n</code> or <code class="alias">number</code></li>
+<li><code class="alias">nr</code> or <code class="alias">numberref</code></li>
+<li><code class="alias">s</code> or <code class="alias">string</code></li>
+<li><code class="alias">u</code> or <code class="alias">userdata</code></li>
+<li><code class="alias">b</code> or <code class="alias">boolean</code></li>
+<li><code class="alias">br</code> or <code class="alias">booleanref</code></li>
+<li><code class="alias">p</code> or <code class="alias">lightuserdata</code></li>
+<li><code class="alias">v</code> or <code class="alias">void</code></li>
+</ul>
+<p><span class="note">*ref* types are references, used to pass and update values directly in memory.</span></p>
+
+<h2>Common Constants and Macros</h2>
+<ul>
+<li><code class="keyword">MB_OK</code>, <code class="keyword">MB_YESNO</code> - MessageBox types</li>
+<li><code class="keyword">WS_OVERLAPPEDWINDOW</code>, <code class="keyword">WS_CHILD</code>, <code class="keyword">WS_VISIBLE</code> - Window styles</li>
+<li><code class="keyword">SW_SHOW</code>, <code class="keyword">SW_HIDE</code> - ShowWindow commands</li>
+<li><code class="keyword">COLOR_WINDOW</code>, <code class="keyword">COLOR_BTNFACE</code> - Predefined colors</li>
+<li><code class="keyword">IDC_ARROW</code>, <code class="keyword">IDC_HAND</code> - Predefined cursors</li>
+<li><code class="keyword">IDI_APPLICATION</code>, <code class="keyword">IDI_WARNING</code> - Predefined icons</li>
+<li><code class="keyword">CS_HREDRAW</code>, <code class="keyword">CS_VREDRAW</code> - Window class styles</li>
+<li><code class="keyword">WM_DESTROY</code>, <code class="keyword">WM_COMMAND</code> - Window messages</li>
+</ul>
+
+<h2>Advanced Tips and Safety</h2>
+<ul>
+<li>LWindows uses SEH (<code>__try/__except</code>) so memory faults don’t crash Lua.</li>
+<li>Keep alive the closures you pass to Win32 while the window exists.</li>
+<li>Value references are managed via <code>Val2Addr</code> to pass and update memory directly.</li>
+<li>Avoid passing more than 16 arguments to <code>Addr2Val</code> for native functions.</li>
+<li>Return <code>DefWindowProc</code> in callbacks if a message is not handled.</li>
+<li>LWindows routes messages by HWND and class name automatically, allowing multiple controls without conflicts.</li>
+<li>You don’t need to specify <code>sizeof</code> for standard structs (RECT, POINT, WINDOWPLACEMENT).</li>
+</ul>
+
+<h2>Quick Example</h2>
+<pre><code>
+require"windows.h"
+local k32 = GetModuleHandle("kernel32.dll")
+local GetTickCount_addr = GetProcAddress(k32, "GetTickCount")
+local gettick = Addr2Val(Num2Addr(GetTickCount_addr), "integer", {})
+print("Ticks:", gettick())
+
+local nameBuf, bufsz = Val2Addr(nil, 256)
+local sizeRef = Val2Addr(bufsz)
+local getComputerName = Addr2Val(
+    Num2Addr(GetProcAddress(k32,"GetComputerNameA")),
+    "boolean",
+    {"string","lightuserdata"}
+)
+if getComputerName(nameBuf, sizeRef) then
+    print("PC:", nameBuf)
+end
+</code></pre>
+
+<h2>Minimal Window Example in Lua with LWindows</h2>
+<pre><code>
+require "windows.h"
+
+local function onButtonClick(hwnd)
+    MessageBox(hwnd, "Hello world!", "My first window", MB_OK)
+end
+
+local winProc = function(hWnd, uMsg, wParam, lParam)
+    if uMsg == WM_DESTROY then
+        PostQuitMessage(0)
+        return 0
+    elseif uMsg == WM_COMMAND then
+        if LOWORD(wParam) == 1001 then
+            onButtonClick(hWnd)
+        end
+    end
+    return DefWindowProc(hWnd, uMsg, wParam, lParam)
+end
+
+local CLASS_NAME = "LuaClass"
+local wc = {
+    style = CS_HREDRAW | CS_VREDRAW,
+    lpfnWndProc = winProc,
+    cbClsExtra = 0,
+    cbWndExtra = 0,
+    hInstance = GetModuleHandle(nil),
+    hIcon = nil,
+    hCursor = LoadCursor(nil, IDC_ARROW),
+    hbrBackground = COLOR_WINDOW+1,
+    lpszMenuName = nil,
+    lpszClassName = CLASS_NAME,
+    hIconSm = nil
+}
+RegisterClassEx(wc)
+
+local hwnd = CreateWindow(
+    CLASS_NAME,
+    "Hello World from Lua",
+    WS_OVERLAPPEDWINDOW,
+    100, 100, 400, 300,
+    nil, nil,
+    wc.hInstance
+)
+
+local hButton = CreateWindow(
+    "BUTTON",
+    "Click me",
+    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+    50, 50, 100, 30,
+    hwnd,
+    1001,
+    wc.hInstance
+)
+
+ShowWindow(hwnd, SW_SHOW)
+UpdateWindow(hwnd)
+LoopMessages()
+</code></pre>
+
+<p>This example creates a simple window with a button. <code>LoopMessages()</code> processes events. Message routing and closure management are handled internally by LWindows.</p>
+
+</body>
+</html>
