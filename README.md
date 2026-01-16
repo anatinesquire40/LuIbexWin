@@ -1,9 +1,10 @@
 # Lua Windows
 
-**Lua Windows (`lwindows`)** is a specialized module that allows Lua to interact directly with the Windows API (Win32).
+**Lua Windows (`lwindows`)** is a specialized module that allows Lua to interact directly with the Windows API (Win32).  
 It provides access to native functions, structures, messages, and system utilities, making Lua a powerful tool for developing applications and scripts that require deep control of the Windows environment.
 
-**Compatibility:** Lua 5.3 up to the latest version.
+### Compatibility
+Lua 5.3 and newer.
 
 ---
 
@@ -11,17 +12,17 @@ It provides access to native functions, structures, messages, and system utiliti
 
 Before compiling and using `lwindows`, make sure you have:
 
-1. **CMake ≥ 3.16**
-2. **Visual Studio with C++ and MASM support**
-3. A **Lua** installation (5.3 or newer)
-4. Sufficient disk space, as `lwindows` exposes many functions and complex structures
+1. **CMake ≥ 3.16**  
+2. **Visual Studio** with C++ and MASM support  
+3. **Lua** installation (5.3 or newer)  
+4. Sufficient disk space (as `lwindows` exposes many functions and complex structures)
 
 ---
 
 ## Library Compilation
 
-1. Open a terminal in the project directory.
-2. Create a build directory:
+1. Open a terminal in the project directory.  
+2. Create a build directory and navigate to it:
 
    ```bat
    mkdir build
