@@ -82,7 +82,7 @@ Lua_Function(GetWindowText)
 Lua_Function(SetWindowPos)
 {
     HWND hwnd = luaL_wingetbycheckudata(L, 1, HWND);
-    HWND hWndInsertAfter = luaL_wingetbycheckudata(L, 2, HWND);
+    HWND hWndInsertAfter = luaL_wingetbyudata(L, 2, HWND);
     int X = (int)luaL_checkinteger(L, 3);
     int Y = (int)luaL_checkinteger(L, 4);
     int cx = (int)luaL_checkinteger(L, 5);
