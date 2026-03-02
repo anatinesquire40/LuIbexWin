@@ -1,6 +1,7 @@
 static const std::unordered_map<std::string, std::string> typeAliases = {
     { "i", "integer" }, { "b", "boolean" },
-    { "n", "number" },
+    { "d", "double" },
+    { "f", "float" },
     { "s", "string" },
     { "p", "lightuserdata" }, { "u", "userdata"},
     { "v", "void" }
@@ -108,25 +109,22 @@ static void makeDinamicStruct(lua_State* L, int tableIdx, size_t& size, std::vec
 
     size = buffer.size();
 }
-
+typedef std::vector<std::variant<void*, lua_Number, float>> TExecVector;
 
 template<typename T>
-T getArg(const std::vector<std::variant<void*, lua_Number>>& args, size_t i) {
-    if constexpr (std::is_same_v<T, lua_Number>)
-        return std::get<lua_Number>(args[i]);
-    else
-        return std::get<void*>(args[i]);
+static T getArg(const TExecVector& args, size_t i) {
+        return std::get<T>(args[i]);
 }
 
 // Call with sign
 template<typename Ret, typename... Args, size_t... I>
-Ret callFunc(FARPROC func, const std::vector<std::variant<void*, lua_Number>>& args, std::index_sequence<I...>) {
+static Ret callFunc(FARPROC func, const TExecVector& args, std::index_sequence<I...>) {
     return ((Ret(*)(Args...))func)(getArg<Args>(args, I)...);
 }
 
 // Select sign
 template<typename Ret>
-Ret execFunc(lua_State* L, FARPROC func, const std::vector<std::variant<void*, lua_Number>>& args, int nargs, bool hasNumber) {
+static Ret execFunc(lua_State* L, FARPROC func, const TExecVector& args, int nargs, bool hasNumber) {
     Ret result{};
     bool success = false;
     uintptr_t exceptionCode = 0;
@@ -217,19 +215,25 @@ Ret execFunc(lua_State* L, FARPROC func, const std::vector<std::variant<void*, l
     return result;
 }
 
-static void checkArgs(lua_State* L, bool hasNumber, const std::vector<std::variant<void*, lua_Number>>& args, int nargs)
+static void checkArgs(lua_State* L, bool hasNumber, const TExecVector& args, int nargs)
 {
     for (int i = 0; i < nargs; ++i) {
+        if (std::holds_alternative<float>(args[i])) {
+            luaL_error(L, "Float32 is not supported on the default trampoline.");
+        }
         if (hasNumber && !std::holds_alternative<lua_Number>(args[i])) {
             luaL_error(L, "All arguments must be numbers when at least one argument is a number.");
         }
     }
 }
-static void separateArgs(const std::vector<std::variant<void*, lua_Number>>& args, lua_Number* argsf, void** argsa, int nargs)
+static void separateArgs(const TExecVector& args, lua_Number* argsf, float* argsf32, void** argsa, int nargs)
 {
     for (int i = 0; i < nargs; ++i) {
         if (std::holds_alternative<lua_Number>(args[i])) {
             argsf[i] = getArg<lua_Number>(args, i);
+        }
+        else if (std::holds_alternative<float>(args[i])) {
+            argsf32[i] = getArg<float>(args, i);
         }
         else {
             argsa[i] = getArg<void*>(args, i);
@@ -237,14 +241,15 @@ static void separateArgs(const std::vector<std::variant<void*, lua_Number>>& arg
     }
 }
 
-static int luacallany(lua_State* L)
+template<typename T>
+static T luacallt(lua_State* L, void* func)
 {
-    void* result = nullptr;
+    T result;
     bool success = false;
     uintptr_t exceptionCode = 0;
 
     __try {
-        result = ((void* (*)())lua_touserdata(L, 1))();
+        result = ((T(*)())func)();
         success = true;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -256,31 +261,7 @@ static int luacallany(lua_State* L)
         crashError(L, "Addr2Val", "function call has", exceptionCode);
     }
 
-    lua_pushlightuserdata(L, result);
-    return 1;
-}
-
-static int luacallfloat(lua_State* L)
-{
-    lua_Number result = 0.0;
-    bool success = false;
-    uintptr_t exceptionCode = 0;
-
-    __try {
-        result = ((lua_Number(*)())lua_touserdata(L, 1))();
-        success = true;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        success = false;
-        exceptionCode = GetExceptionCode();
-    }
-
-    if (!success) {
-        crashError(L, "Addr2Val", "function call has", exceptionCode);
-    }
-
-    lua_pushnumber(L, result);
-    return 1;
+    return result;
 }
 static int executeProcAddr(lua_State* L) {
     FARPROC func = (FARPROC)lua_touserdata(L, lua_upvalueindex(1));
@@ -293,7 +274,7 @@ static int executeProcAddr(lua_State* L) {
     int nargs = lua_gettop(L);
     if (!hascustomback && nargs > 16) luaL_error(L, "too many arguments, max is 16");
 
-    std::vector<std::variant<void*, lua_Number>> args(nargs);
+    TExecVector args(nargs);
     std::vector<std::string> types;
     size_t typelen = lua_rawlen(L, lua_upvalueindex(2));
     for (size_t i = 1; i <= typelen; ++i) {
@@ -302,50 +283,53 @@ static int executeProcAddr(lua_State* L) {
         lua_pop(L, 1);
     }
     bool hasNumber = false;
-    for (int i = 1; i <= nargs; ++i) {
-        const std::string& type = normalize_type(types[i - 1]);
-        if (type == "integer") args[i - 1] = (void*)(intptr_t)luaL_checkinteger(L, i);
-        else if (type == "number") { args[i - 1] = luaL_checknumber(L, i); hasNumber = true; }
-        else if (type == "boolean") args[i - 1] = (void*)(intptr_t)(lua_toboolean(L, i) ? 1 : 0);
-        else if (type == "lightuserdata") args[i - 1] = lua_touserdata(L, i);
-        else if (type == "string") args[i - 1] = (void*)luaL_checkstring(L, i);
-        else if (type == "userdata") args[i - 1] = luaL_checkuserdata(L, i);
+    for (int i = 0; i < nargs; ++i) {
+        int i2 = i + 1;
+        const std::string& type = normalize_type(types[i]);
+        if (type == "integer") args[i] = (void*)(intptr_t)luaL_checkinteger(L, i2);
+        else if (type == "double") { args[i] = luaL_checknumber(L, i2); hasNumber = true; }
+        else if (type == "float") { args[i] = (float)luaL_checknumber(L, i2); }
+        else if (type == "boolean") args[i] = (void*)(intptr_t)(lua_toboolean(L, i2) ? 1 : 0);
+        else if (type == "lightuserdata") args[i] = lua_touserdata(L, i2);
+        else if (type == "string") args[i] = (void*)luaL_checkstring(L, i2);
+        else if (type == "userdata") args[i] = luaL_checkuserdata(L, i2);
         else return luaL_error(L, "Unsupported arg type: %s", type.c_str());
     }
     lua_Number numResult = 0;
     void* result = 0;
-    bool retNum = strcmp(retType, "number") == 0;
+    bool retNum = strcmp(retType, "double") == 0;
     if (hascustomback)
     {
+        bool retF32 = strcmp(retType, "float") == 0;
         lua_Number* argsf = new lua_Number[nargs]();
+        float* argsf32 = new float[nargs]();
         void** argsa = new void* [nargs]();
-        separateArgs(args, argsf, argsa, nargs);
+        separateArgs(args, argsf, argsf32, argsa, nargs);
         lua_pushvalue(L, callbackidx);
         lua_pushvalue(L, lua_upvalueindex(1));
         lua_pushvalue(L, lua_upvalueindex(2));
         lua_pushlightuserdata(L, argsa);
         lua_pushlightuserdata(L, argsf);
+        lua_pushlightuserdata(L, argsf32);
         lua_pushboolean(L, retNum);
+        lua_pushboolean(L, retF32);
         lua_pushinteger(L, nargs);
-        if (retNum)
-        {
-            lua_pushcfunction(L, luacallfloat);
-        }
-        else {
-            lua_pushcfunction(L, luacallany);
-        }
-        lua_call(L, 7, 1);
+        lua_call(L, 8, 1);
         if (!lua_isnil(L, -1))
         {
-            if (retNum)
-            {
-                numResult = lua_tonumber(L, -1);
+            void* f = lua_touserdata(L, -1);
+            if (retNum) {
+                numResult = luacallt<lua_Number>(L, f);
+            }
+            else if (retF32) {
+                numResult = (lua_Number)luacallt<float>(L, f);
             }
             else {
-                result = lua_touserdata(L, -1);
+                result = luacallt<void*>(L, f);
             }
         }
         delete[] argsf;
+        delete[] argsf32;
         delete[] argsa;
     }
     else {
@@ -363,7 +347,7 @@ static int executeProcAddr(lua_State* L) {
 
 
     if (strcmp(retType, "integer") == 0) lua_pushinteger(L, (lua_Integer)result);
-    else if (strcmp(retType, "number") == 0) lua_pushnumber(L, numResult);
+    else if (strcmp(retType, "double") == 0 or strcmp(retType, "float") == 0) lua_pushnumber(L, numResult);
     else if (strcmp(retType, "lightuserdata") == 0 or strcmp(retType, "userdata") == 0) lua_pushlightuserdata(L, (void*)result);
     else if (strcmp(retType, "string") == 0) lua_pushstring(L, (const char*)result);
     else if (strcmp(retType, "boolean") == 0) lua_pushboolean(L, (bool)result);
@@ -592,12 +576,6 @@ Lua_Function(WriteAddr)
 	return 0;
 }
 
-Lua_Function(GetLuaStateAddr)
-{
-    lua_pushlightuserdata(L, L);
-    return 1;
-}
-
 Lua_Function(Num2Addr)
 {
     lua_Integer num = luaL_checkinteger(L, 1);
@@ -607,7 +585,7 @@ Lua_Function(Num2Addr)
 }
 Lua_Function(Addr2Num)
 {
-    void* addr = lua_touserdata(L, 1);
+    void* addr = (void*)lua_topointer(L, 1);
     lua_pushinteger(L, (lua_Integer)addr);
     return 1;
 }
@@ -822,15 +800,15 @@ Lua_Function(GlobalFree)
     return 1;
 }
 
-void register_winmemory(lua_State* L) // los macros, huevón
+void register_winmemory(lua_State* L)
 {
-    REGIMACRO(CP_ACP)         // ANSI code page
-        REGIMACRO(CP_OEMCP)       // OEM code page
-        REGIMACRO(CP_MACCP)       // Mac code page
-        REGIMACRO(CP_THREAD_ACP)  // Thread’s ANSI code page
-        REGIMACRO(CP_UTF7)        // UTF-7
-        REGIMACRO(CP_UTF8)        // UTF-8
-        REGIMACRO(CP_SYMBOL)      // Symbol code page
+    REGIMACRO(CP_ACP)
+        REGIMACRO(CP_OEMCP)
+        REGIMACRO(CP_MACCP)
+        REGIMACRO(CP_THREAD_ACP)
+        REGIMACRO(CP_UTF7)
+        REGIMACRO(CP_UTF8)
+        REGIMACRO(CP_SYMBOL)
 
         REGIMACRO(GMEM_FIXED)
         REGIMACRO(GMEM_MOVEABLE)
@@ -869,7 +847,6 @@ void register_winmemory(lua_State* L) // los macros, huevón
         REGIMACRO(CF_DSPBITMAP)
         REGIMACRO(CF_DSPMETAFILEPICT)
         REGIMACRO(CF_DSPENHMETAFILE)
-        // Get Window Long
         REGIMACRO(GWLP_WNDPROC)
         REGIMACRO(GWLP_HINSTANCE)
         REGIMACRO(GWLP_HWNDPARENT)

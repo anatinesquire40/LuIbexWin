@@ -135,6 +135,5 @@ INIT_WPR()
     ADD2WPR(CloseHandle)
     ADD2WPR(CopyAddr)
     ADD2WPR(WriteAddr)
-    ADD2WPR(GetLuaStateAddr)
 END_WPR()
 }
