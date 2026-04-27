@@ -210,11 +210,24 @@ static LPPAINTSTRUCT table_to_PAINTSTRUCT(lua_State* L, int index)
 Lua_Function(BeginPaint)
 {
 	HWND hwnd = luaL_wingetbycheckudata(L, 1, HWND);
-    luaL_checktype(L, 2, LUA_TTABLE);
-	LPPAINTSTRUCT lpps = (LPPAINTSTRUCT)lua_newuserdata(L, sizeof(PAINTSTRUCT));
-	lua_setfield(L, 2, "p");
+	int lpPaintType = lua_type(L, 2);
+    LPPAINTSTRUCT lpps = nullptr;
+    if (lpPaintType == LUA_TTABLE)
+    {
+        lpps = (LPPAINTSTRUCT)lua_newuserdata(L, sizeof(PAINTSTRUCT));
+	}
+	else if (lpPaintType == LUA_TUSERDATA) {
+        lpps = luaL_wingetbycheckudata(L, 2, LPPAINTSTRUCT);
+    }
+    else {
+		return luaL_error(L, "Invalid type for arg #2. Expected table or userdata.");
+    }
 	HDC hdc = BeginPaint(hwnd, lpps);
-	PAINTSTRUCT_to_table(L, lpps, 2);
+    if (lpPaintType == LUA_TTABLE)
+    {
+        lua_setfield(L, 2, "p");
+        PAINTSTRUCT_to_table(L, lpps, 2);
+    }
 	pushWindowStruct(L, HDC, hdc);
     return 1;
 }
@@ -222,8 +235,17 @@ Lua_Function(EndPaint)
 {
     HWND hwnd = luaL_wingetbycheckudata(L, 1, HWND);
     
-    luaL_checktype(L, 2, LUA_TTABLE);
-    LPPAINTSTRUCT lpps = table_to_PAINTSTRUCT(L, 2);
+    int lpPaintType = lua_type(L, 2);
+    LPPAINTSTRUCT lpps = nullptr;
+    if (lpPaintType == LUA_TTABLE)
+    {
+        lpps = table_to_PAINTSTRUCT(L, 2);
+    }
+    else if (lpPaintType == LUA_TUSERDATA) {
+        lpps = luaL_wingetbycheckudata(L, 2, LPPAINTSTRUCT);
+    } else {
+        return luaL_error(L, "Invalid type for arg #2. Expected table or userdata.");
+	}
     BOOL result = EndPaint(hwnd, lpps);
     lua_pushboolean(L, result);
 	return 1;
@@ -236,7 +258,10 @@ Lua_Function(InvalidateRect)
     if (lua_type(L, 2) == LUA_TTABLE)
     {
         table_toLPRECT(L, 2, &rect);
-		rectPtr = &rect;
+        rectPtr = &rect;
+    }
+    else if (lua_type(L, 2) == LUA_TUSERDATA) {
+        rectPtr = luaL_wingetbycheckudata(L, 2, LPRECT);
     }
     BOOL erase = (BOOL)lua_toboolean(L, 3);
     BOOL result = InvalidateRect(hwnd, rectPtr, erase);

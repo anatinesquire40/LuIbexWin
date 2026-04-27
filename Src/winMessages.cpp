@@ -1,3 +1,4 @@
+#include<TlHelp32.h>
 static std::unordered_map<std::string, std::function<LRESULT(HWND, UINT, WPARAM, LPARAM)>> proc_callbacks_cn;
 static std::unordered_map<HWND, std::string> hwnd_classname_map;
 static std::string findClassNameByHwnd(HWND hwnd) {
