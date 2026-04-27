@@ -1,0 +1,15 @@
+INIT_LUAOPEN()
+register_window_funcs(L);
+register_cursor(L);
+register_all_wm_messages(L);
+register_style(L);
+register_brush(L);
+register_icon(L);
+register_vkeys(L);
+register_commcontrol(L);
+register_explorerutills(L);
+register_winmemory(L);
+register_commonwinutils(L);
+register_render(L);
+register_filesystem(L);
+END_LUAOPEN()
