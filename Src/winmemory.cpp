@@ -268,7 +268,6 @@ static int executeProcAddr(lua_State* L) {
     luaL_checktype(L, lua_upvalueindex(2), LUA_TTABLE);
     const char* retType = lua_tostring(L, lua_upvalueindex(3));
     int callbackidx = lua_upvalueindex(4);
-
     bool hascustomback = lua_isfunction(L, callbackidx);
 
     int nargs = lua_gettop(L);
@@ -327,6 +326,13 @@ static int executeProcAddr(lua_State* L) {
             else {
                 result = luacallt<void*>(L, f);
             }
+            if (lua_isfunction(L, lua_upvalueindex(5)))
+            {
+                lua_pushvalue(L, lua_upvalueindex(5));
+                lua_pushvalue(L, -1);
+                lua_call(L, 1, 0);
+            }
+            lua_pop(L, 1); // remove f from stack
         }
         delete[] argsf;
         delete[] argsf32;
@@ -451,7 +457,13 @@ Lua_Function(Addr2Val)
         else {
             lua_pushnil(L);
         }
-        lua_pushcclosure(L, executeProcAddr, 4);
+        if (lua_isfunction(L, 5)) {
+            lua_pushvalue(L, 5);
+		}
+        else {
+            lua_pushnil(L);
+        }
+        lua_pushcclosure(L, executeProcAddr, 5);
         return 1;
     }
     else

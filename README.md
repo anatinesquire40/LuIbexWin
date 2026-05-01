@@ -84,6 +84,14 @@ To make Lua use `LuIbexWin` correctly:
 
 ---
 
+## Prebuilt Binaries
+
+Precompiled binaries for LuIbexWin are available here:
+
+👉 https://sourceforge.net/projects/luibexwin-binaries
+
+---
+
 ## Usage
 
 To use LuIbexWin in your Lua scripts:
