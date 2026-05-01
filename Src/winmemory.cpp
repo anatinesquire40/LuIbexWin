@@ -329,7 +329,7 @@ static int executeProcAddr(lua_State* L) {
             if (lua_isfunction(L, lua_upvalueindex(5)))
             {
                 lua_pushvalue(L, lua_upvalueindex(5));
-                lua_pushvalue(L, -1);
+                lua_pushvalue(L, -2);
                 lua_call(L, 1, 0);
             }
             lua_pop(L, 1); // remove f from stack
