@@ -29,7 +29,7 @@ Before compiling and using `LuIbexWin`, make sure you have:
 2. **Visual Studio** with C++ and MASM support (as `LuIbexWin` only supports `MSVC`)
 3. **Lua** installation (5.3 or newer) and in x64
 4. Sufficient disk space (as `LuIbexWin` exposes many functions and complex structures)
-
+5. You must have [Lua ARchive](https://github.com/anatinesquire40/Lua-ARchive) installed first if you wanna build the `Lua ARchive` module.
 ---
 
 ## Lua Setup
@@ -74,13 +74,14 @@ In the build of the Lua Source you will find `luaXX.lib`, copy it to `lib` and r
 
 To make Lua use `LuIbexWin` correctly:
 
-1. **Lua Modules:**
-   Copy the `ibexwin` directory (containing `h.lua` and other scripts) into your Lua modules folder (`package.path`).
+1. **Lua ARchive Module:**
+   build the `lar` folder into your Lua ARchives module folder
+   ```bat
+    lar --build -o example\LuIbexWin.lar lar
+   ```
 
 2. **Native Modules:**
    Copy `luibexwin.dll` into your Lua native libraries folder (`package.cpath`).
-
-3. Make sure `package.path` and `package.cpath` include these directories so that `require "ibexwin.h"` work properly.
 
 ---
 
