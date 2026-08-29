@@ -85,14 +85,6 @@ To make Lua use `LuIbexWin` correctly:
 
 ---
 
-## Prebuilt Binaries
-
-Precompiled binaries for LuIbexWin are available here:
-
-👉 https://sourceforge.net/projects/luibexwin-binaries
-
----
-
 ## Usage
 
 To use LuIbexWin in your Lua scripts:
@@ -112,8 +104,8 @@ require "ibexwin.h"
 - `WriteAddr(dest, src, size)`: Writes to memory
 - `LoopMessages()`: Processes Windows message queue
 
-### Type Aliases
-- `i/integer`, `d/double`, `f/float`, `s/string`, `u/userdata`, `b/boolean`, `p/lightuserdata`, `v/void`
+### Type Numerical
+- `VT_INTEGER = 0`, `VT_BOOLEAN = 1`, `VT_DOUBLE = 2`, `VT_FLOAT = 3`, `VT_USERDATA = 4`, `VT_STRING = 5`, `VT_VOID = 6`
 
 ### Common Constants
 - Window styles: `WS_OVERLAPPEDWINDOW`, `WS_CHILD`, `WS_VISIBLE`
@@ -135,7 +127,7 @@ local k32 = GetModuleHandle("kernel32.dll")
 -- Get address of GetTickCount
 local GetTickCount_addr = GetProcAddress(k32, "GetTickCount")
 -- Convert to Lua callable function
-local gettick = Addr2Val(Num2Addr(GetTickCount_addr), "integer", {})
+local gettick = Addr2Val(GetTickCount_addr, 0 --[[ VT_INTEGER ]], {})
 -- Call it
 print("Ticks:", gettick())
 
@@ -143,9 +135,9 @@ print("Ticks:", gettick())
 local nameBuf, bufsz = Val2Addr(nil, 256)
 local sizeRef = Val2Addr(bufsz)
 local getComputerName = Addr2Val(
-    Num2Addr(GetProcAddress(k32, "GetComputerNameA")),
-    "boolean",
-    {"string", "lightuserdata"}
+    GetProcAddress(k32, "GetComputerNameA"),
+    1, -- VT_BOOLEAN
+    {5, 4} -- VT_STRING, VTG_USERDATA
 )
 if getComputerName(nameBuf, sizeRef) then
     print("PC:", Addr2Val(nameBuf, "string"))
@@ -225,6 +217,6 @@ This creates a window with a clickable button. LuIbexWin handles message routing
 - Limit arguments to 16 for `Addr2Val` native functions
 - Return `DefWindowProc` for unhandled messages
 - Messages are routed by HWND and class name automatically
-- No need to specify `sizeof` for standard structs like RECT, POINT
+- No need to specify `sizeof` for **SUPPORTED** structs
 
 For more details, see the full documentation in the wiki.
