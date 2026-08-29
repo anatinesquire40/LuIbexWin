@@ -189,7 +189,7 @@ static int Trampoline_BrowseFNA(HWND hwnd, UINT uMsg, LPARAM lParam, LPARAM data
     lua_State* L = cust->L;
     lua_rawgeti(L, LUA_REGISTRYINDEX, cust->funcRef);
 
-    // Pasamos los parámetros del callback a Lua
+    // Pasamos los parï¿½metros del callback a Lua
     lua_pushinteger(L, uMsg);
     lua_pushinteger(L, lParam);
 
@@ -228,7 +228,7 @@ static void table2browseinfoa(lua_State* L, int index, LPBROWSEINFOA bi)
     bi->hwndOwner = lua_isuserdata(L, -1) ? *(HWND*)lua_touserdata(L, -1) : NULL;
     lua_pop(L, 1);
 
-    // pidlRoot (no muy común, pero soportado)
+    // pidlRoot (no muy comï¿½n, pero soportado)
     lua_getfield(L, index, "pidlRoot");
     bi->pidlRoot = lua_isuserdata(L, -1) ? (PCIDLIST_ABSOLUTE)lua_touserdata(L, -1) : NULL;
     lua_pop(L, 1);
@@ -306,7 +306,7 @@ Lua_Function(SHBrowseForFolder)
 }
 Lua_Function(SHParseDisplayName)
 {
-    // 1. Recibir todos los parámetros desde Lua
+    // 1. Recibir todos los parï¿½metros desde Lua
     PCWSTR pszName = (PCWSTR)luaL_checkstring(L, 1);       // nombre/ruta
     LPBC pbc = (LPBC)lua_touserdata(L, 2); // puede ser nil
     ULONG sfgaoIn = (ULONG)luaL_optinteger(L, 3, 0); // atributos de entrada opcionales

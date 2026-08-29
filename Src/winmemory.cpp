@@ -1,17 +1,26 @@
-static const std::unordered_map<std::string, std::string> typeAliases = {
-    { "i", "integer" }, { "b", "boolean" },
-    { "d", "double" },
-    { "f", "float" },
-    { "s", "string" },
-    { "p", "lightuserdata" }, { "u", "userdata"},
-    { "v", "void" }
+enum ValTypes
+{
+    VT_INTEGER,
+    VT_BOOLEAN,
+    VT_DOUBLE,
+    VT_FLOAT,
+    VT_USERDATA,
+    VT_STRING,
+    VT_NIL
 };
-
-static std::string normalize_type(const std::string& input) {
-    auto it = typeAliases.find(input);
-    return it != typeAliases.end() ? it->second : input;
-}
-
+typedef std::vector<std::variant<void*, lua_Number, float>> TExecVector;
+typedef struct {
+    int callbackidx;
+    FARPROC func;
+    TExecVector args;
+    size_t nargs;
+    bool hasNumber;
+    bool retNum;
+    bool retF32;
+    void* result;
+    ValTypes retType;
+    lua_Number numResult;
+} DispatchInfo;
 //-------------------- Helpers --------------------
 template<typename T>
 static void makeUd(lua_State* L, T value) {
@@ -38,165 +47,94 @@ static void crashError(lua_State* L, const char* funcName, const char* action, c
     luaL_error(L, "%s", buf);
 
 }
-static void makeDinamicStruct(lua_State* L, int tableIdx, size_t& size, std::vector<char>& buffer, std::vector<size_t>& sizes) {
-    int tab = lua_absindex(L, tableIdx);
-    size = 0;
-
-    const size_t len = lua_rawlen(L, tab);
-    for (size_t i = 1; i <= len; ++i) {
-        lua_rawgeti(L, tab, i);
-        size_t fieldSize = 0;
-
-        if (lua_isinteger(L, -1)) {
-            lua_Integer v = lua_tointeger(L, -1);
-            fieldSize = sizeof(lua_Integer);
-            size_t oldSize = buffer.size();
-            buffer.resize(oldSize + fieldSize);
-            memcpy(buffer.data() + oldSize, &v, fieldSize);
-        }
-        else if (lua_isnumber(L, -1)) {
-            lua_Number v = lua_tonumber(L, -1);
-            fieldSize = sizeof(lua_Number);
-            size_t oldSize = buffer.size();
-            buffer.resize(oldSize + fieldSize);
-            memcpy(buffer.data() + oldSize, &v, fieldSize);
-        }
-        else if (lua_isboolean(L, -1)) {
-            bool v = lua_toboolean(L, -1);
-            fieldSize = sizeof(bool);
-            size_t oldSize = buffer.size();
-            buffer.resize(oldSize + fieldSize);
-            memcpy(buffer.data() + oldSize, &v, fieldSize);
-        }
-        else if (lua_isuserdata(L, -1)) {
-            void* ud = lua_touserdata(L, -1);
-            fieldSize = sizeof(void*);
-            size_t oldSize = buffer.size();
-            buffer.resize(oldSize + fieldSize);
-            memcpy(buffer.data() + oldSize, ud, fieldSize);
-        }
-        else if (lua_isstring(L, -1)) {
-            size_t slen;
-            const char* str = lua_tolstring(L, -1, &slen);
-            fieldSize = sizeof(size_t) + slen;
-            size_t oldSize = buffer.size();
-            buffer.resize(oldSize + fieldSize);
-            memcpy(buffer.data() + oldSize, &slen, sizeof(size_t));
-            memcpy(buffer.data() + oldSize + sizeof(size_t), str, slen);
-        }
-        else if (lua_istable(L, -1)) {
-            std::vector<char> subBuf;
-            size_t subSize;
-            std::vector<size_t> subSizes;
-            makeDinamicStruct(L, -1, subSize, subBuf, subSizes);
-            fieldSize = subSize;
-            size_t oldSize = buffer.size();
-            buffer.resize(oldSize + subSize);
-            memcpy(buffer.data() + oldSize, subBuf.data(), subSize);
-            sizes.insert(sizes.end(), subSizes.begin(), subSizes.end()); // incluir tamaños internos
-        }
-        else {
-            int zero = 0;
-            fieldSize = sizeof(int);
-            size_t oldSize = buffer.size();
-            buffer.resize(oldSize + fieldSize);
-            memcpy(buffer.data() + oldSize, &zero, fieldSize);
-        }
-
-        sizes.push_back(fieldSize);
-        lua_pop(L, 1);
-    }
-
-    size = buffer.size();
-}
-typedef std::vector<std::variant<void*, lua_Number, float>> TExecVector;
 
 template<typename T>
 static T getArg(const TExecVector& args, size_t i) {
-        return std::get<T>(args[i]);
+    return std::get<T>(args[i]);
 }
 
 // Call with sign
 template<typename Ret, typename... Args, size_t... I>
-static Ret callFunc(FARPROC func, const TExecVector& args, std::index_sequence<I...>) {
-    return ((Ret(*)(Args...))func)(getArg<Args>(args, I)...);
+static Ret callFunc(DispatchInfo* info, std::index_sequence<I...>) {
+    return ((Ret(*)(Args...))info->func)(getArg<Args>(info->args, I)...);
 }
 
 // Select sign
 template<typename Ret>
-static Ret execFunc(lua_State* L, FARPROC func, const TExecVector& args, int nargs, bool hasNumber) {
+static Ret execFunc(lua_State* L, DispatchInfo* info) {
     Ret result{};
     bool success = false;
     uintptr_t exceptionCode = 0;
-
+    bool hasNumber = info->hasNumber;
+    size_t nargs = info->nargs;
     __try {
         switch (nargs) {
         case 0:
-            result = ((Ret(*)())func)();
+            result = ((Ret(*)())info->func)();
             break;
         case 1:
-            result = hasNumber ? callFunc<Ret, lua_Number>(func, args, std::index_sequence<0>{})
-                : callFunc<Ret, void*>(func, args, std::index_sequence<0>{});
+            result = hasNumber ? callFunc<Ret, lua_Number>(info, std::index_sequence<0>{})
+                : callFunc<Ret, void*>(info, std::index_sequence<0>{});
             break;
         case 2:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1>{})
-                : callFunc<Ret, void*, void*>(func, args, std::index_sequence<0, 1>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number>(info, std::index_sequence<0, 1>{})
+                : callFunc<Ret, void*, void*>(info, std::index_sequence<0, 1>{});
             break;
         case 3:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2>{})
-                : callFunc<Ret, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2>{})
+                : callFunc<Ret, void*, void*, void*>(info, std::index_sequence<0, 1, 2>{});
             break;
         case 4:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2, 3>{})
-                : callFunc<Ret, void*, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2, 3>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2, 3>{})
+                : callFunc<Ret, void*, void*, void*, void*>(info, std::index_sequence<0, 1, 2, 3>{});
             break;
         case 5:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2, 3, 4>{})
-                : callFunc<Ret, void*, void*, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2, 3, 4>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2, 3, 4>{})
+                : callFunc<Ret, void*, void*, void*, void*, void*>(info, std::index_sequence<0, 1, 2, 3, 4>{});
             break;
         case 6:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5>{})
-                : callFunc<Ret, void*, void*, void*, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2, 3, 4, 5>{})
+                : callFunc<Ret, void*, void*, void*, void*, void*, void*>(info, std::index_sequence<0, 1, 2, 3, 4, 5>{});
             break;
         case 7:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6>{})
-                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6>{})
+                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6>{});
             break;
         case 8:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7>{})
-                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7>{})
+                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7>{});
             break;
         case 9:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8>{})
-                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8>{})
+                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8>{});
             break;
         case 10:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9>{})
-                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9>{})
+                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9>{});
             break;
         case 11:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10>{})
-                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10>{})
+                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10>{});
             break;
         case 12:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11>{})
-                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11>{})
+                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11>{});
             break;
         case 13:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12>{})
-                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12>{})
+                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12>{});
             break;
         case 14:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13>{})
-                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13>{})
+                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13>{});
             break;
         case 15:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14>{})
-                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14>{})
+                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14>{});
             break;
         case 16:
-            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15>{})
-                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(func, args, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15>{});
+            result = hasNumber ? callFunc<Ret, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number, lua_Number>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15>{})
+                : callFunc<Ret, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*>(info, std::index_sequence<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15>{});
             break;
         default:
             luaL_error(L, "Too many arguments: %d", nargs);
@@ -215,32 +153,39 @@ static Ret execFunc(lua_State* L, FARPROC func, const TExecVector& args, int nar
     return result;
 }
 
-static void checkArgs(lua_State* L, bool hasNumber, const TExecVector& args, int nargs)
+static void checkArgs(lua_State* L, DispatchInfo* info)
 {
-    for (int i = 0; i < nargs; ++i) {
+    const TExecVector& args = info->args;
+    for (size_t i = 0; i < info->nargs; ++i) {
         if (std::holds_alternative<float>(args[i])) {
             luaL_error(L, "Float32 is not supported on the default trampoline.");
         }
-        if (hasNumber && !std::holds_alternative<lua_Number>(args[i])) {
+        if (info->hasNumber && !std::holds_alternative<lua_Number>(args[i])) {
             luaL_error(L, "All arguments must be numbers when at least one argument is a number.");
         }
     }
 }
-static void separateArgs(const TExecVector& args, lua_Number* argsf, float* argsf32, void** argsa, int nargs)
+static lua_Integer getArgInt(TExecVector args, lua_Integer i)
 {
-    for (int i = 0; i < nargs; ++i) {
-        if (std::holds_alternative<lua_Number>(args[i])) {
-            argsf[i] = getArg<lua_Number>(args, i);
-        }
-        else if (std::holds_alternative<float>(args[i])) {
-            argsf32[i] = getArg<float>(args, i);
-        }
-        else {
-            argsa[i] = getArg<void*>(args, i);
-        }
+    if (std::holds_alternative<lua_Number>(args[i])) {
+        return std::bit_cast<lua_Integer>(getArg<lua_Number>(args, i));
+    }
+    else if(std::holds_alternative<float>(args[i])) {
+        return (lua_Integer)std::bit_cast<uint32_t>(getArg<float>(args, i));
+    } else {
+        return (lua_Integer)getArg<void*>(args,i);
     }
 }
-
+static void pushArgsLua(lua_State* L, DispatchInfo* info)
+{
+    lua_newtable(L);
+    int argsIdx = lua_absindex(L, -1);
+	for (lua_Integer i = 0; i < info->nargs; ++i) {
+        lua_Integer la = getArgInt(info->args, i);
+        lua_pushinteger(L, la);
+        lua_rawseti(L, argsIdx, i+1);
+    }
+}
 template<typename T>
 static T luacallt(lua_State* L, void* func)
 {
@@ -263,104 +208,162 @@ static T luacallt(lua_State* L, void* func)
 
     return result;
 }
-static int executeProcAddr(lua_State* L) {
-    FARPROC func = (FARPROC)lua_touserdata(L, lua_upvalueindex(1));
-    luaL_checktype(L, lua_upvalueindex(2), LUA_TTABLE);
-    const char* retType = lua_tostring(L, lua_upvalueindex(3));
-    int callbackidx = lua_upvalueindex(4);
-    bool hascustomback = lua_isfunction(L, callbackidx);
-
-    int nargs = lua_gettop(L);
-    if (!hascustomback && nargs > 16) luaL_error(L, "too many arguments, max is 16");
-
-    TExecVector args(nargs);
-    std::vector<std::string> types;
-    size_t typelen = lua_rawlen(L, lua_upvalueindex(2));
-    for (size_t i = 1; i <= typelen; ++i) {
-        lua_rawgeti(L, lua_upvalueindex(2), i);
-        types.emplace_back(lua_tostring(L, -1) ? lua_tostring(L, -1) : "invalid");
-        lua_pop(L, 1);
-    }
-    bool hasNumber = false;
-    for (int i = 0; i < nargs; ++i) {
-        int i2 = i + 1;
-        const std::string& type = normalize_type(types[i]);
-        if (type == "integer") args[i] = (void*)(intptr_t)luaL_checkinteger(L, i2);
-        else if (type == "double") { args[i] = luaL_checknumber(L, i2); hasNumber = true; }
-        else if (type == "float") { args[i] = (float)luaL_checknumber(L, i2); }
-        else if (type == "boolean") args[i] = (void*)(intptr_t)(lua_toboolean(L, i2) ? 1 : 0);
-        else if (type == "lightuserdata") args[i] = lua_touserdata(L, i2);
-        else if (type == "string") args[i] = (void*)luaL_checkstring(L, i2);
-        else if (type == "userdata") args[i] = luaL_checkuserdata(L, i2);
-        else return luaL_error(L, "Unsupported arg type: %s", type.c_str());
-    }
-    lua_Number numResult = 0;
-    void* result = 0;
-    bool retNum = strcmp(retType, "double") == 0;
-    if (hascustomback)
-    {
-        bool retF32 = strcmp(retType, "float") == 0;
-        lua_Number* argsf = new lua_Number[nargs]();
-        float* argsf32 = new float[nargs]();
-        void** argsa = new void* [nargs]();
-        separateArgs(args, argsf, argsf32, argsa, nargs);
-        lua_pushvalue(L, callbackidx);
-        lua_pushvalue(L, lua_upvalueindex(1));
-        lua_pushvalue(L, lua_upvalueindex(2));
-        lua_pushlightuserdata(L, argsa);
-        lua_pushlightuserdata(L, argsf);
-        lua_pushlightuserdata(L, argsf32);
-        lua_pushboolean(L, retNum);
-        lua_pushboolean(L, retF32);
-        lua_pushinteger(L, nargs);
-        lua_call(L, 8, 1);
-        if (!lua_isnil(L, -1))
-        {
-            void* f = lua_touserdata(L, -1);
-            if (retNum) {
-                numResult = luacallt<lua_Number>(L, f);
-            }
-            else if (retF32) {
-                numResult = (lua_Number)luacallt<float>(L, f);
-            }
-            else {
-                result = luacallt<void*>(L, f);
-            }
-            if (lua_isfunction(L, lua_upvalueindex(5)))
-            {
-                lua_pushvalue(L, lua_upvalueindex(5));
-                lua_pushvalue(L, -2);
-                lua_call(L, 1, 0);
-            }
-            lua_pop(L, 1); // remove f from stack
-        }
-        delete[] argsf;
-        delete[] argsf32;
-        delete[] argsa;
-    }
-    else {
-        checkArgs(L, hasNumber, args, nargs);
-        if (retNum)
-        {
-            numResult = execFunc<lua_Number>(L, func, args, nargs, hasNumber);
-        }
-        else
-        {
-            result = execFunc<void*>(L, func, args, nargs, hasNumber);
-        }
-    }
-
-
-
-    if (strcmp(retType, "integer") == 0) lua_pushinteger(L, (lua_Integer)result);
-    else if (strcmp(retType, "double") == 0 or strcmp(retType, "float") == 0) lua_pushnumber(L, numResult);
-    else if (strcmp(retType, "lightuserdata") == 0 or strcmp(retType, "userdata") == 0) lua_pushlightuserdata(L, (void*)result);
-    else if (strcmp(retType, "string") == 0) lua_pushstring(L, (const char*)result);
-    else if (strcmp(retType, "boolean") == 0) lua_pushboolean(L, (bool)result);
-    else if (strcmp(retType, "void") == 0) return 0;
+static bool pushRet(lua_State* L, DispatchInfo* info)
+{
+    const ValTypes& retType = info->retType;
+    void* result = info->result;
+    if (retType == VT_INTEGER) lua_pushinteger(L, (lua_Integer)result);
+    else if (retType == VT_DOUBLE or retType == VT_FLOAT) lua_pushnumber(L, info->numResult);
+    else if (retType == VT_USERDATA) lua_pushlightuserdata(L, (void*)result);
+    else if (retType == VT_STRING) lua_pushstring(L, (const char*)result);
+    else if (retType == VT_BOOLEAN) lua_pushboolean(L, (bool)result);
+    else if (retType == VT_NIL) return false;
     else luaL_error(L, "Unsupported return type: %s", retType);
+    return true;
+}
+static void getArgsLua(lua_State* L, DispatchInfo* info)
+{
+    for (lua_Integer i = 1; i <= info->nargs; ++i) {
+        lua_rawgeti(L, lua_upvalueindex(2), i);
+        ValTypes type = (ValTypes)lua_tointeger(L, -1);
+        lua_pop(L, 1);
+        size_t veci = i - 1;
+        if (type == VT_INTEGER) info->args[veci] = (void*)lua_tointeger(L, i);
+        else if (type == VT_DOUBLE) { info->args[veci] = lua_tonumber(L, i); info->hasNumber = true; }
+        else if (type == VT_FLOAT)  info->args[veci] = (float)lua_tonumber(L, i);
+        else if (type == VT_BOOLEAN) info->args[veci] = (void*)(uintptr_t)(lua_toboolean(L, i) ? 1 : 0);
+        else if (type == VT_USERDATA)  info->args[veci] = lua_touserdata(L, i);
+        else if (type == VT_STRING) info->args[veci] = (void*)lua_tostring(L, i);
+        else luaL_error(L, "Unsupported arg type: %d", type);
+    }
+}
 
-    return 1;
+static void dispatchCustom(lua_State* L, DispatchInfo* info)
+{
+    lua_pushvalue(L, info->callbackidx);
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_pushvalue(L, lua_upvalueindex(2));
+    pushArgsLua(L, info);
+    lua_pushinteger(L, info->nargs);
+    lua_pushboolean(L, info->retNum);
+    lua_pushboolean(L, info->retF32);
+    lua_call(L, 6, 1);
+    if (!lua_isnil(L, -1))
+    {
+        void* f = lua_touserdata(L, -1);
+        if (info->retNum) {
+            info->numResult = luacallt<lua_Number>(L, f);
+        }
+        else if (info->retF32) {
+            info->numResult = (lua_Number)luacallt<float>(L, f);
+        }
+        else {
+            info->result = luacallt<void*>(L, f);
+        }
+        if (lua_isfunction(L, lua_upvalueindex(6)))
+        {
+            lua_pushvalue(L, lua_upvalueindex(6));
+            lua_pushvalue(L, -2);
+            lua_call(L, 1, 0);
+        }
+        lua_pop(L, 1); // remove f from stack
+    }
+}
+static void dispatchDefault(lua_State* L, DispatchInfo* info)
+{
+    checkArgs(L, info);
+    if (info->retNum)
+    {
+        info->numResult = execFunc<lua_Number>(L, info);
+    }
+    else
+    {
+        info->result = execFunc<void*>(L, info);
+    }
+}
+static int executeProcAddr(lua_State* L) {
+    DispatchInfo info;
+    info.func = (FARPROC)lua_touserdata(L, lua_upvalueindex(1));
+    luaL_checktype(L, lua_upvalueindex(2), LUA_TTABLE);
+    info.retType = (ValTypes)lua_tointeger(L, lua_upvalueindex(4));
+    info.callbackidx = lua_upvalueindex(5);
+    bool hascustomback = lua_isfunction(L, info.callbackidx);
+    info.nargs = lua_tointeger(L, lua_upvalueindex(3));
+    if (lua_gettop(L) != info.nargs) luaL_error(L, "the number of arguments given doesn't match with the function signature");
+    if (!hascustomback && info.nargs > 16) luaL_error(L, "too many arguments, max is 16");
+    info.args = TExecVector(info.nargs);
+    info.hasNumber = false;
+    info.retNum = info.retType == VT_DOUBLE;
+    info.retF32 = info.retType == VT_FLOAT;
+    info.numResult = 0.0;
+    info.result = 0;
+    getArgsLua(L, &info);
+    hascustomback ? dispatchCustom(L, &info) : dispatchDefault(L, &info);
+    if (pushRet(L, &info)) {
+        return 1;
+    }
+    return 0;
+}
+
+Lua_Function(Addr2Val)
+{
+    void* ptr = lua_touserdata(L, 1);
+    if (!ptr) {
+        return luaL_error(L, "null pointers are not allowed, make sure you use correct pointers");
+    }
+    bool isFunctionPointer = lua_istable(L, 3);
+    const ValTypes retType = (ValTypes)luaL_checkinteger(L, 2);
+
+    if (isFunctionPointer) {
+        lua_Integer nargs = (lua_Integer)lua_rawlen(L, 3);
+        lua_pushvalue(L, 1);
+        lua_pushvalue(L, 3);
+        lua_pushinteger(L, nargs);
+        lua_pushinteger(L, retType);
+        if (lua_isfunction(L, 4)) {
+            lua_pushvalue(L, 4);
+        }
+        else {
+            lua_pushnil(L);
+        }
+        if (lua_isfunction(L, 5)) {
+            lua_pushvalue(L, 5);
+		}
+        else {
+            lua_pushnil(L);
+        }
+        lua_pushcclosure(L, executeProcAddr, 6);
+        return 1;
+    }
+    else
+    {
+        static const std::unordered_map<ValTypes, std::function<void(lua_State*, void*)>> retHandlers = {
+            { VT_INTEGER, [](lua_State* L, void* p) { lua_pushinteger(L, directReadMem<lua_Integer>(L, (lua_Integer*)p, "integer")); } },
+            { VT_BOOLEAN, [](lua_State* L, void* p) { lua_pushboolean(L, directReadMem<bool>(L, (bool*)p, "boolean")); } },
+            { VT_DOUBLE,  [](lua_State* L, void* p) { lua_pushnumber(L, directReadMem<lua_Number>(L, (lua_Number*)p, "double")); } },
+            { VT_FLOAT,   [](lua_State* L, void* p) { lua_pushnumber(L, (lua_Number)directReadMem<float>(L, (float*)p, "float")); } },
+            { VT_USERDATA,[](lua_State* L, void* p) { lua_pushvalue(L, 1); } },
+            { VT_STRING,  [](lua_State* L, void* p) { 
+                if (lua_isinteger(L, 3)) {
+                    lua_Integer size = lua_tointeger(L, 3);
+                    if (size > 0) {
+                        lua_pushlstring(L, (const char*)p, (size_t)size);
+                        return;
+                    }
+                }
+                lua_pushstring(L, (const char*)p);
+            } },
+        };
+
+        auto it = retHandlers.find(retType);
+        if (it != retHandlers.end()) {
+            it->second(L, ptr);
+        }
+        else {
+            luaL_error(L, "Unsupported return type: %s", retType);
+        }
+        return 1;
+    }
 }
 
 
@@ -405,96 +408,17 @@ static int executeProcAddr(lua_State* L) {
         return 2; \
     }
 
-#define TABLE2UD() \
-    if (lua_istable(L, 1)) { \
-        size_t len; \
-        std::vector<char> buf; \
-        std::vector<size_t> sizes; \
-        makeDinamicStruct(L, 1, len, buf, sizes); \
-        void* ud = lua_newuserdata(L, len); \
-        memcpy(ud, buf.data(), len); \
-        lua_pushinteger(L, len); \
-        lua_newtable(L); \
-        for (size_t i = 0; i < sizes.size(); ++i) { \
-            lua_pushinteger(L, sizes[i]); \
-            lua_rawseti(L, -2, i + 1); \
-        } \
-        return 3; \
-    }
-
-
 Lua_Function(Val2Addr)
 {
-        VAL2UD(lua_Integer, lua_isinteger, integer)
-        VAL2UD(lua_Number, lua_isnumber, number)
-        VAL2UD(bool, lua_isboolean, boolean)
-        NILUDSZ()
-        NILBUF()
-        NULLPTR()
-        TABLE2UD()
-        STR2UD()
-        lua_pushnil(L);
+    VAL2UD(lua_Integer, lua_isinteger, integer)
+    VAL2UD(lua_Number, lua_isnumber, number)
+    VAL2UD(bool, lua_isboolean, boolean)
+    NILUDSZ()
+    NILBUF()
+    NULLPTR()
+    STR2UD()
+    lua_pushnil(L);
     return 1;
-}
-Lua_Function(Addr2Val)
-{
-    void* ptr = lua_touserdata(L, 1);
-    if (!ptr) {
-        return luaL_error(L, "null pointers are not allowed, make sure you use correct pointers");
-    }
-    bool isFunctionPointer = lua_istable(L, 3);
-    const std::string retTypeStr = normalize_type(luaL_checkstring(L, 2));
-    const char* retType = retTypeStr.c_str();
-
-    if (isFunctionPointer) {
-        luaL_checktype(L, 3, LUA_TTABLE);
-        lua_pushvalue(L, 1);
-        lua_pushvalue(L, 3);
-        lua_pushstring(L, retType);
-        if (lua_isfunction(L, 4)) {
-            lua_pushvalue(L, 4);
-        }
-        else {
-            lua_pushnil(L);
-        }
-        if (lua_isfunction(L, 5)) {
-            lua_pushvalue(L, 5);
-		}
-        else {
-            lua_pushnil(L);
-        }
-        lua_pushcclosure(L, executeProcAddr, 5);
-        return 1;
-    }
-    else
-    {
-        static const std::unordered_map<std::string, std::function<void(lua_State*, void*)>> retHandlers = {
-            { "integer", [](lua_State* L, void* p) { lua_pushinteger(L, directReadMem<lua_Integer>(L, (lua_Integer*)p, "integer")); } },
-            { "number",  [](lua_State* L, void* p) { lua_pushnumber(L, directReadMem<lua_Number>(L, (lua_Number*)p, "number")); } },
-            { "boolean", [](lua_State* L, void* p) { lua_pushboolean(L, directReadMem<bool>(L, (bool*)p, "boolean")); } },
-            { "string",  [](lua_State* L, void* p) { 
-                if (lua_isinteger(L, 3)) {
-                    lua_Integer size = lua_tointeger(L, 3);
-                    if (size > 0) {
-                        lua_pushlstring(L, (const char*)p, (size_t)size);
-                        return;
-                    }
-                }
-                lua_pushstring(L, (const char*)p);
-            } },
-            { "userdata",[](lua_State* L, void* p) { lua_pushlightuserdata(L, p); } },
-            { "lightuserdata", [](lua_State* L, void* p) { lua_pushlightuserdata(L, p); } }
-        };
-
-        auto it = retHandlers.find(retTypeStr);
-        if (it != retHandlers.end()) {
-            it->second(L, ptr);
-        }
-        else {
-            luaL_error(L, "Unsupported return type: %s", retType);
-        }
-        return 1;
-    }
 }
 static bool trymemcpy(void* dest, const void* src, size_t size, uintptr_t& code)
 {

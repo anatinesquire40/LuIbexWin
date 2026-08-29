@@ -9,7 +9,7 @@ Lua_Function(MessageBeep)
 Lua_Function(Beep)
 {
     DWORD freq = (DWORD)luaL_checkinteger(L, 1);      // frecuencia en Hz
-    DWORD duration = (DWORD)luaL_checkinteger(L, 2);  // duración en ms
+    DWORD duration = (DWORD)luaL_checkinteger(L, 2);  // duraciï¿½n en ms
     ::Beep(freq, duration);
     return 0;
 }

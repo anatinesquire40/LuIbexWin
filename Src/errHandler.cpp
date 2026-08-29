@@ -14,7 +14,7 @@ Lua_Function(MAKELANGID)
 }
 
 
-// Llame Lua a esta función para obtener el mensaje formateado
+// Llame Lua a esta funciï¿½n para obtener el mensaje formateado
 Lua_Function(FormatMessage)
 {
 
@@ -31,10 +31,10 @@ Lua_Function(FormatMessage)
     DWORD nSize = (DWORD)luaL_optinteger(L, 5, 0);
     int nargs = lua_gettop(L) - 5;
 
-    // Creamos un arreglo de LPVOID para los argumentos que usará FormatMessage
+    // Creamos un arreglo de LPVOID para los argumentos que usarï¿½ FormatMessage
     LPVOID* args = NULL;
     int i;
-    // Variables auxiliares para argumentos numéricos (evitar punteros a estáticos)
+    // Variables auxiliares para argumentos numï¿½ricos (evitar punteros a estï¿½ticos)
     int* numArgs = NULL;
 
     if (nargs > 0)
@@ -43,7 +43,7 @@ Lua_Function(FormatMessage)
         if (!args)
             return luaL_error(L, "Out of memory");
 
-        // Para números almacenamos en heap para evitar errores
+        // Para nï¿½meros almacenamos en heap para evitar errores
         numArgs = (int*)malloc(sizeof(int) * nargs);
         if (!numArgs)
         {
